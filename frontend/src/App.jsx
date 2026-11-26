@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from "react";
 import {
   BarChart3, BookOpen, CalendarDays, Check, ChevronRight,
-  Code2, Flame, Home, LogOut, Medal, Plus, Shield,
+  Code2, FileText, Flame, Home, ListChecks, LogOut, Medal, Plus, Shield,
   Sparkles, Target, Trash2, Trophy, UserRound, X
 } from "lucide-react";
 import { Bar, Doughnut } from "react-chartjs-2";
@@ -12,43 +12,24 @@ import {
 } from "chart.js";
 
 import "./style.css";
+import "./dsa.css";
+import { request, today } from "./lib.js";
+import Heatmap from "./heatmap.jsx";
+import DsaPage, { DsaSummary } from "./dsa.jsx";
+import NotesPage from "./notes.jsx";
 
 ChartJS.register(
   CategoryScale, LinearScale, BarElement,
   ArcElement, Tooltip, Legend
 );
 
-const API =
-  import.meta.env.VITE_API_URL || "http://localhost:5000/api";
-
-const today = () => new Date().toISOString().slice(0, 10);
-
 const money = (minutes = 0) =>
   `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 
-async function request(path, token, options = {}) {
-  const response = await fetch(`${API}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(options.headers || {})
-    }
-  });
-
-  const data = await response.json().catch(() => ({
-    message: "Unexpected server response"
-  }));
-
-  if (!response.ok) {
-    throw new Error(data.message || "Request failed");
-  }
-
-  return data;
-}
-
 const navItems = [
   ["Dashboard", Home],
+  ["DSA Sheet", ListChecks],
+  ["Notes", FileText],
   ["Practice Log", BookOpen],
   ["Missions", Target],
   ["Achievements", Medal],
@@ -202,6 +183,8 @@ export default function App() {
   const [missions, setMissions] = useState([]);
   const [achievements, setAchievements] = useState([]);
   const [analytics, setAnalytics] = useState(null);
+  const [problems, setProblems] = useState([]);
+  const [heatmap, setHeatmap] = useState({ days: {} });
 
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState("");
@@ -238,6 +221,8 @@ export default function App() {
     setMissions([]);
     setAchievements([]);
     setAnalytics(null);
+    setProblems([]);
+    setHeatmap({ days: {} });
     setPage("Dashboard");
   }
 
@@ -247,12 +232,14 @@ export default function App() {
     setLoading(true);
 
     try {
-      const [d, s, m, a, an] = await Promise.all([
+      const [d, s, m, a, an, pr, hm] = await Promise.all([
         request("/dashboard", token),
         request("/sessions", token),
         request("/missions", token),
         request("/achievements", token),
-        request("/analytics", token)
+        request("/analytics", token),
+        request("/problems", token),
+        request("/heatmap", token)
       ]);
 
       setDashboard(d);
@@ -260,6 +247,8 @@ export default function App() {
       setMissions(Array.isArray(m) ? m : []);
       setAchievements(Array.isArray(a) ? a : []);
       setAnalytics(an);
+      setProblems(Array.isArray(pr) ? pr : []);
+      setHeatmap(hm && hm.days ? hm : { days: {} });
     } catch (e) {
       notify(e.message);
 
@@ -467,11 +456,32 @@ export default function App() {
                 stats={stats}
                 missions={missions}
                 sessions={sessions}
+                problems={problems}
+                heatmap={heatmap}
                 xpProgress={xpProgress}
                 pct={pct}
                 setPage={setPage}
                 openForm={openNewSession}
                 completeMission={completeMission}
+              />
+            )}
+
+            {page === "DSA Sheet" && (
+              <DsaPage
+                token={token}
+                problems={problems}
+                setProblems={setProblems}
+                notify={notify}
+                refresh={loadAll}
+              />
+            )}
+
+            {page === "Notes" && (
+              <NotesPage
+                token={token}
+                topics={[...new Set(problems.map(p => p.topic))]}
+                notify={notify}
+                refresh={loadAll}
               />
             )}
 
@@ -657,7 +667,7 @@ export default function App() {
 /* ---------------- DASHBOARD ---------------- */
 
 function Dashboard({
-  user, stats, missions, sessions, xpProgress, pct,
+  user, stats, missions, sessions, problems, heatmap, xpProgress, pct,
   setPage, openForm, completeMission
 }) {
   const recent = sessions.slice(0, 4);
@@ -755,8 +765,8 @@ function Dashboard({
         <Stat
           icon={Target}
           label="Problems solved"
-          value={stats?.problemsSolved || 0}
-          foot="Keep solving"
+          value={(stats?.problemsSolved || 0) + (stats?.dsaSolved || 0)}
+          foot="DSA sheet + practice log"
         />
 
         <Stat
@@ -772,6 +782,32 @@ function Dashboard({
           value={`${stats?.todayMinutes || 0} min`}
           foot="Time invested today"
         />
+      </section>
+
+      <section className="panel" style={{ marginTop: 17 }}>
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">CONSISTENCY</p>
+            <h3>Activity calendar</h3>
+          </div>
+        </div>
+
+        <Heatmap days={heatmap?.days || {}} />
+      </section>
+
+      <section className="panel" style={{ marginTop: 17 }}>
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">DSA PROGRESS</p>
+            <h3>Problems solved</h3>
+          </div>
+
+          <button className="text-btn" onClick={() => setPage("DSA Sheet")}>
+            Open sheet <ChevronRight size={15} />
+          </button>
+        </div>
+
+        <DsaSummary problems={problems} />
       </section>
 
       <section className="two-col">

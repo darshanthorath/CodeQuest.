@@ -3,7 +3,10 @@ import auth from "../middleware/auth.js";
 import User from "../models/User.js";
 import PracticeSession from "../models/PracticeSession.js";
 import Mission from "../models/Mission.js";
-import { levelForXP, levelName, todayString } from "../utils/game.js";
+import Problem from "../models/Problem.js";
+import Progress from "../models/Progress.js";
+import Note from "../models/Note.js";
+import { levelForXP, levelName, dateFrom, addDays } from "../utils/game.js";
 
 const router = Router();
 router.use(auth);
@@ -25,15 +28,17 @@ router.get("/dashboard", async (req, res) => {
   try {
     const user = await User.findById(req.userId).select("-password");
     const sessions = await PracticeSession.find({ userId: req.userId });
-    const today = todayString();
+    const today = dateFrom(req);
     const todaySessions = sessions.filter(s => s.date === today);
     const missions = await getOrCreateMissions(req.userId, today);
     const level = levelForXP(user.totalXP);
+    const dsaSolved = await Progress.countDocuments({ userId: req.userId, status: "solved" });
     res.json({
       user: { username: user.username, email: user.email, totalXP: user.totalXP, level, levelName: levelName(level), currentStreak: user.currentStreak, longestStreak: user.longestStreak },
       stats: {
         totalSessions: sessions.length,
         problemsSolved: sessions.filter(s => s.solvedProblem).length,
+        dsaSolved,
         totalMinutes: sessions.reduce((sum, s) => sum + s.durationMinutes, 0),
         todayMinutes: todaySessions.reduce((sum, s) => sum + s.durationMinutes, 0),
         xpToNextLevel: 500 - (user.totalXP % 500)
@@ -44,13 +49,13 @@ router.get("/dashboard", async (req, res) => {
 });
 
 router.get("/missions", async (req, res) => {
-  try { res.json(await getOrCreateMissions(req.userId, todayString())); }
+  try { res.json(await getOrCreateMissions(req.userId, dateFrom(req))); }
   catch (error) { res.status(500).json({ message: error.message }); }
 });
 
 router.post("/missions/:id/complete", async (req, res) => {
   try {
-    const mission = await Mission.findOne({ _id: req.params.id, userId: req.userId, date: todayString() });
+    const mission = await Mission.findOne({ _id: req.params.id, userId: req.userId, date: dateFrom(req) });
     if (!mission) return res.status(404).json({ message: "Mission not found." });
     if (mission.completed) return res.status(400).json({ message: "Mission already completed." });
     mission.completed = true;
@@ -58,14 +63,14 @@ router.post("/missions/:id/complete", async (req, res) => {
     const user = await User.findById(req.userId);
     user.totalXP += mission.xpReward;
     await user.save();
-    const all = await Mission.find({ userId: req.userId, date: todayString() });
+    const all = await Mission.find({ userId: req.userId, date: dateFrom(req) });
     let bonusXP = 0;
     if (all.length && all.every(m => m.completed)) {
       // Award the daily completion bonus only once, tracked by a mission marker.
       const markerTitle = "Daily mission completion bonus";
-      const marker = await Mission.findOne({ userId: req.userId, date: todayString(), title: markerTitle });
+      const marker = await Mission.findOne({ userId: req.userId, date: dateFrom(req), title: markerTitle });
       if (!marker) {
-        await Mission.create({ userId: req.userId, date: todayString(), title: markerTitle, description: "All daily missions completed", xpReward: 100, completed: true });
+        await Mission.create({ userId: req.userId, date: dateFrom(req), title: markerTitle, description: "All daily missions completed", xpReward: 100, completed: true });
         user.totalXP += 100;
         bonusXP = 100;
         await user.save();
@@ -81,12 +86,21 @@ router.get("/achievements", async (req, res) => {
     const sessions = await PracticeSession.find({ userId: req.userId });
     const solved = sessions.filter(s => s.solvedProblem).length;
     const level = levelForXP(user.totalXP);
+    const solvedRows = await Progress.find({ userId: req.userId, status: "solved" }).select("problemId").lean();
+    const solvedProblems = await Problem.find({ _id: { $in: solvedRows.map(r => r.problemId) } }).select("difficulty").lean();
+    const dsaSolved = solvedProblems.length;
+    const hardSolved = solvedProblems.filter(p => p.difficulty === "Hard").length;
+    const noteCount = await Note.countDocuments({ userId: req.userId });
     const definitions = [
       { id: "first-session", name: "First Steps", description: "Record your first coding session.", unlocked: sessions.length >= 1, icon: "🚀" },
       { id: "problem-solver", name: "Problem Solver", description: "Solve 25 coding problems.", unlocked: solved >= 25, icon: "🧩", progress: `${Math.min(solved,25)}/25` },
       { id: "streak-7", name: "7-Day Streak", description: "Practice for 7 consecutive days.", unlocked: user.longestStreak >= 7, icon: "🔥", progress: `${Math.min(user.longestStreak,7)}/7` },
       { id: "level-10", name: "Code Master", description: "Reach level 10.", unlocked: level >= 10, icon: "👑", progress: `${Math.min(level,10)}/10` },
-      { id: "hours-10", name: "Dedicated Coder", description: "Practice for 10 total hours.", unlocked: sessions.reduce((n,s)=>n+s.durationMinutes,0) >= 600, icon: "⏱️" }
+      { id: "hours-10", name: "Dedicated Coder", description: "Practice for 10 total hours.", unlocked: sessions.reduce((n,s)=>n+s.durationMinutes,0) >= 600, icon: "⏱️" },
+      { id: "dsa-10", name: "Sheet Starter", description: "Solve 10 questions from the DSA sheet.", unlocked: dsaSolved >= 10, icon: "📘", progress: `${Math.min(dsaSolved,10)}/10` },
+      { id: "dsa-50", name: "DSA Grinder", description: "Solve 50 questions from the DSA sheet.", unlocked: dsaSolved >= 50, icon: "🏋️", progress: `${Math.min(dsaSolved,50)}/50` },
+      { id: "hard-5", name: "Hard Hitter", description: "Solve 5 Hard questions from the DSA sheet.", unlocked: hardSolved >= 5, icon: "💎", progress: `${Math.min(hardSolved,5)}/5` },
+      { id: "notes-5", name: "Note Keeper", description: "Save 5 notes in the Notes section.", unlocked: noteCount >= 5, icon: "📝", progress: `${Math.min(noteCount,5)}/5` }
     ];
     res.json(definitions);
   } catch (error) { res.status(500).json({ message: error.message }); }
@@ -95,11 +109,8 @@ router.get("/achievements", async (req, res) => {
 router.get("/analytics", async (req, res) => {
   try {
     const sessions = await PracticeSession.find({ userId: req.userId });
-    const now = new Date();
-    const days = Array.from({ length: 7 }, (_, i) => {
-      const d = new Date(now); d.setDate(now.getDate() - (6 - i));
-      return d.toISOString().slice(0,10);
-    });
+    const end = dateFrom(req);
+    const days = Array.from({ length: 7 }, (_, i) => addDays(end, -(6 - i)));
     const weekly = days.map(date => ({
       date, minutes: sessions.filter(s => s.date === date).reduce((n,s)=>n+s.durationMinutes,0),
       sessions: sessions.filter(s => s.date === date).length

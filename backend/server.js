@@ -7,6 +7,10 @@ import dotenv from "dotenv";
 import authRoutes from "./src/routes/authRoutes.js";
 import sessionRoutes from "./src/routes/sessionRoutes.js";
 import gameRoutes from "./src/routes/gameRoutes.js";
+import dsaRoutes from "./src/routes/dsaRoutes.js";
+import noteRoutes from "./src/routes/noteRoutes.js";
+import activityRoutes from "./src/routes/activityRoutes.js";
+import { seedProblems } from "./src/data/problemSeed.js";
 
 dotenv.config();
 
@@ -35,13 +39,24 @@ app.get("/", (_req, res) => {
 
 app.use("/api/auth", authRoutes);
 app.use("/api/sessions", sessionRoutes);
+app.use("/api/problems", dsaRoutes);
+app.use("/api/notes", noteRoutes);
+app.use("/api/heatmap", activityRoutes);
 app.use("/api", gameRoutes);
+
+// Last-resort error handler so unexpected errors return JSON instead of an HTML page
+app.use((error, _req, res, _next) => {
+  console.error(error);
+  res.status(500).json({ message: "Something went wrong on the server." });
+});
 
 const PORT = process.env.PORT || 5000;
 
 mongoose.connect(process.env.MONGO_URI)
-  .then(() => {
+  .then(async () => {
     console.log("MongoDB connected");
+    const count = await seedProblems();
+    console.log(`DSA sheet ready (${count} questions)`);
     app.listen(PORT, () => {
       console.log(`CodeQuest API running on port ${PORT}`);
     });

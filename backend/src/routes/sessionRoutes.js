@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 import auth from "../middleware/auth.js";
 import User from "../models/User.js";
 import PracticeSession from "../models/PracticeSession.js";
-import { updateStreak } from "../utils/game.js";
+import { updateStreak, dateFrom } from "../utils/game.js";
 
 const router = Router();
 router.use(auth);
@@ -21,7 +21,7 @@ router.post("/", async (req, res) => {
     if (!language?.trim() || !topic?.trim() || !Number.isFinite(Number(durationMinutes)) || Number(durationMinutes) < 1) {
       return res.status(400).json({ message: "Language, topic and a valid duration are required." });
     }
-    const practiceDate = date || new Date().toISOString().slice(0, 10);
+    const practiceDate = date || dateFrom(req);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(practiceDate)) return res.status(400).json({ message: "Invalid date." });
     const xpEarned = 20 + (solvedProblem ? 50 : 0);
     const user = await User.findById(req.userId);
